@@ -1,1 +1,638 @@
+<!DOCTYPE html>
+<html lang="fr" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CFLimmo - Audit Autorisations ACC</title>
+    <!-- Bibliothèques nécessaires chargées via CDN -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/xlsx/dist/xlsx.full.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <script>
+        window.tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        cfl: {
+                            50: '#fef2f2',
+                            100: '#fee2e2',
+                            500: '#ef4444',
+                            600: '#dc2626',
+                            700: '#b91c1c',
+                            800: '#991b1b',
+                            900: '#7f1d1d',
+                        },
+                        dark: {
+                            bg: '#0f172a',
+                            panel: '#1e293b',
+                            border: '#334155',
+                            hover: '#0f172a',
+                            text: '#f8fafc',
+                            muted: '#94a3b8'
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #0f172a; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #475569; }
+        .custom-scrollbar { scrollbar-width: thin; scrollbar-color: #334155 #0f172a; }
+        .pine-gradient { background: radial-gradient(circle at top right, rgba(21, 128, 61, 0.08), transparent); }
+        .project-image-container { 
+            position: relative;
+            width: 100%;
+            height: 240px;
+            border-radius: 1.5rem;
+            overflow: hidden;
+            background: #1e293b;
+            border: 1px solid #334155;
+            box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.06);
+        }
+    </style>
+</head>
+<body class="bg-dark-bg text-dark-text font-sans h-screen overflow-hidden flex flex-col selection:bg-cfl-600 selection:text-white pine-gradient">
+    <!-- Zones de stockage pour les données intégrées lors du partage -->
+    <script id="embedded-csv" type="text/plain"></script>
+    <script id="embedded-metadata" type="application/json"></script>
+    <script id="embedded-image" type="text/plain"></script>
+    <script id="embedded-logo" type="text/plain"></script>
 
+    <div id="root" class="h-full"></div>
+
+    <script id="main-script" type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+
+        // --- Configuration des niveaux d'accès (Standard ACC) ---
+        const ACCESS_LEVELS = {
+            'NA': { label: 'Aucun accès', desc: 'Aucun accès au dossier.', color: 'bg-gray-800 text-gray-400 border-gray-700' },
+            'V': { label: 'Lecture', desc: 'Lecture (affichage des fichiers)', color: 'bg-blue-900/40 text-blue-300 border-blue-800' },
+            'VD': { label: 'Lecture + Téléchargement', desc: 'Lecture (affichage et téléchargement des fichiers)', color: 'bg-indigo-900/40 text-indigo-300 border-indigo-800' },
+            'C': { label: 'Création', desc: 'Création (affichage + téléchargement + publication des annotations)', color: 'bg-yellow-900/40 text-yellow-300 border-yellow-800' },
+            'CU': { label: 'Création + Chargement', desc: 'Création (affichage + téléchargement + publication des annotations + chargement)', color: 'bg-orange-900/40 text-orange-300 border-orange-800' },
+            'E': { label: 'Écriture', desc: 'Écriture (affichage + téléchargement + publication des annotations + chargement + modification)', color: 'bg-purple-900/40 text-purple-300 border-purple-800' },
+            'M': { label: 'Gestion', desc: 'Gestion (affichage + téléchargement + publication des annotations + chargement + modification + gestion)', color: 'bg-teal-900/40 text-teal-300 border-teal-800' },
+            'A': { label: 'Administrateur', desc: 'Contrôle total sur le dossier et les autorisations.', color: 'bg-cfl-900/40 text-cfl-400 border-cfl-800' },
+        };
+
+        const Icons = {
+            Home: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2"><path strokeLinecap="round" strokeLinejoin="round" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"></path></svg>,
+            Folder: () => <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20"><path d="M2 6a2 2 0 012-2h5l2 2h5a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"></path></svg>,
+            FolderOpen: () => <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2"><path strokeLinecap="round" strokeLinejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path></svg>,
+            ChevronDown: () => <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2"><path strokeLinecap="round" strokeLinejoin="round" d="M6 9L12 15L18 9"></path></svg>,
+            ChevronRight: () => <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2"><path strokeLinecap="round" strokeLinejoin="round" d="M9 6L15 12L9 18"></path></svg>,
+            Search: () => <svg className="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2"><path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>,
+            Filter: () => <svg className="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2"><path strokeLinecap="round" strokeLinejoin="round" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"></path></svg>,
+            Close: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2"><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12"></path></svg>,
+            User: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2"><path strokeLinecap="round" strokeLinejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"></path></svg>,
+            Users: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2"><path strokeLinecap="round" strokeLinejoin="round" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>,
+            Upload: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2"><path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>,
+            Image: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2"><path strokeLinecap="round" strokeLinejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>,
+            Share: () => <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2"><path strokeLinecap="round" strokeLinejoin="round" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z"></path></svg>,
+            LogoBuilding: () => <svg className="w-full h-full" fill="currentColor" viewBox="0 0 24 24"><path d="M3 21h18v-2H3v2zm6-4h2v-2H9v2zm-4 0h2v-2H5v2zm8 0h2v-2h-2v2zm4 0h2v-2h-2v2zm0-4h2v-2h-2v2zm-4 0h2v-2h-2v2zm-4 0h2v-2H9v2zm-4 0h2v-2H5v2zm0-4h2v-2H5v2zm4 0h2v-2H9v2zm4 0h2v-2h-2v2zm4 0h2v-2h-2v2zm0-4h2V7h-2v2zm-4 0h2V7h-2v2zm-4 0h2V7H9v2zM5 9h2V7H5v2zm8-6H9v2h4V3z" /></svg>,
+            FolderTree: () => <svg className="w-5 h-5 text-cfl-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2"><path strokeLinecap="round" strokeLinejoin="round" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 002-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path></svg>,
+            Pine: () => <svg className="w-8 h-8 transition-colors duration-300" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2L4.5 11h3.5v7h8v-7h3.5L12 2zm0 18a1 1 0 110 2 1 1 0 010-2z" /></svg>,
+            CFLLogo: () => <svg className="w-full h-full" viewBox="0 0 156 34" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M14.2 0H0V34H41.4V23.8H14.2V0ZM51.3 0V34H92.8V23.8H65.5V17.1H84.3V7.2H65.5V10.2H51.3V0ZM102.7 0V34H116.9V23.8H144.1V34H155.4V0H102.7ZM144.1 13.6H116.9V10.2H144.1V13.6Z" fill="#DC2626"/></svg>
+        };
+
+        // --- 2. FONCTIONS DE LOGIQUE ---
+        function parseCSV(csvText) {
+            const lines = csvText.split('\n').filter(l => l.trim() !== '');
+            if (lines.length < 3) return null;
+            const parseRow = (str) => {
+                const res = []; let inQ = false; let cur = '';
+                for (let i = 0; i < str.length; i++) {
+                    if (str[i] === '"') inQ = !inQ;
+                    else if (str[i] === ',' && !inQ) { res.push(cur.trim()); cur = ''; }
+                    else cur += str[i];
+                }
+                res.push(cur.trim()); return res;
+            };
+            const h1 = parseRow(lines[0]); const h2 = parseRow(lines[1]);
+            let uStart = -1; let rStart = -1;
+            for (let i = 0; i < h1.length; i++) {
+                if (h1[i].toLowerCase().includes('utilisateurs') && uStart === -1) uStart = i;
+                if (h1[i].toLowerCase().includes('rôles') && rStart === -1) rStart = i;
+            }
+            const uInfo = []; const rInfo = [];
+            for (let i = 1; i < h2.length; i++) {
+                if (!h2[i]) continue;
+                if (rStart !== -1 && i >= rStart) rInfo.push({ index: i, name: h2[i] });
+                else if (uStart !== -1 && i >= uStart) uInfo.push({ index: i, name: h2[i] });
+            }
+            const tree = { name: 'Racine', path: '', children: [], permissions: { users: [], roles: [] } };
+            let fCount = 0;
+            for (let r = 2; r < lines.length; r++) {
+                const row = parseRow(lines[r]); if (!row[0]) continue;
+                fCount++;
+                const parts = row[0].split('/'); let cur = tree; let curP = '';
+                for (let i = 0; i < parts.length; i++) {
+                    curP += (curP ? '/' : '') + parts[i];
+                    let child = cur.children.find(c => c.name === parts[i]);
+                    if (!child) { child = { name: parts[i], path: curP, children: [], permissions: { users: [], roles: [] } }; cur.children.push(child); }
+                    cur = child;
+                }
+                uInfo.forEach(u => cur.permissions.users.push({ name: u.name, level: row[u.index] || 'NA', type: 'user' }));
+                rInfo.forEach(ro => cur.permissions.roles.push({ name: ro.name, level: row[ro.index] || 'NA', type: 'role' }));
+            }
+            return { tree, stats: { folders: fCount, users: uInfo.length, roles: rInfo.length }, usersList: uInfo.map(x => x.name), rolesList: rInfo.map(x => x.name) };
+        }
+
+        function isRoleInGroup(name, group) {
+            const up = name.toUpperCase().trim();
+            const norm = up.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+            if (group === 'g_cflimmo_bim') return ['BENOIT TAHCHI', 'CECILIA OLIVE', 'PERRINE MERTES', 'MARYNE FOSSE'].some(n => norm.includes(n));
+            if (group === 'g_cflimmo_cdp') return up.includes('SCFL_IMMO_CHEF-PROJET') || norm.includes('JONATHAN D HONDT');
+            if (group === 'g_cflimmo') return (up.startsWith('CFLI') || up.startsWith('SCFL')) && !up.includes('CHEF-PROJET');
+            if (group === 'g_entreprises') return up.startsWith('EN');
+            if (group === 'g_controle') return ['SECO', 'OGCE', 'GEOT', 'COSS'].some(p => up.startsWith(p));
+            if (group === 'g_mog_bim') return ['MOE_BIM', 'STRU_BIM', 'TSPE_BIM'].some(s => up.includes(s));
+            if (group === 'g_mog') return ['ARCH', 'STRU', 'TSPE', 'INGC', 'AMO', 'MOEG', 'PAYS', 'ACOU'].some(p => up.startsWith(p)) && !['MOE_BIM', 'STRU_BIM', 'TSPE_BIM'].some(s => up.includes(s));
+            return false;
+        }
+
+        function getGlobalGroupName(name) {
+            const up = name.toUpperCase().trim();
+            const norm = up.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+            if (['BENOIT TAHCHI', 'CECILIA OLIVE', 'PERRINE MERTES', 'MARYNE FOSSE'].some(n => norm.includes(n))) return 'ℹ️ CFL BIM';
+            if (up.includes('SCFL_IMMO_CHEF-PROJET') || norm.includes('JONATHAN D HONDT')) return '👔 CFL CDP';
+            if (['MOE_BIM', 'STRU_BIM', 'TSPE_BIM'].some(s => up.includes(s))) return '💻 MOG BIM';
+            if (['ARCH', 'STRU', 'TSPE', 'INGC', 'AMO', 'MOEG', 'PAYS', 'ACOU'].some(p => up.startsWith(p))) return '📐 MOG';
+            if (['SECO', 'OGCE', 'GEOT', 'COSS'].some(p => up.startsWith(p))) return '📋 Contrôle';
+            if (up.startsWith('EN')) return '🏗️ Entreprises';
+            if (up.startsWith('CFLI') || up.startsWith('SCFL')) return '🏢 CFLimmo';
+            return '-';
+        }
+
+        // --- 3. COMPOSANTS UI ---
+        function ProjectImageDisplay({ customImage, isStandalone }) {
+            if (customImage) {
+                return <img src={customImage} alt="Projet Baabdath" className="w-full h-full object-cover" />;
+            }
+            return (
+                <div className={`w-full h-full flex flex-col items-center justify-center bg-dark-panel/50 border-2 border-dashed border-dark-border transition-all duration-300 ${!isStandalone ? 'group-hover:border-cfl-500/50 group-hover:bg-dark-panel' : ''}`}>
+                    <div className={`p-4 bg-dark-bg rounded-full mb-3 shadow-lg transition-colors duration-300 text-green-600/20 ${!isStandalone ? 'group-hover:bg-cfl-600/20 group-hover:text-cfl-500' : ''}`}>
+                        <Icons.Pine />
+                    </div>
+                    {!isStandalone && <span className="text-[10px] font-black uppercase tracking-[0.2em] text-dark-muted opacity-60 group-hover:text-cfl-400 transition-colors duration-300">Ajouter une photo du projet</span>}
+                    <span className="text-[9px] font-medium text-dark-muted mt-2 italic opacity-50 flex items-center gap-1.5">
+                        <span>🌲 Pins</span> • <span>🕊️ Oiseaux</span> • <span>🦗 Cigales</span>
+                    </span>
+                    <span className="text-[8px] font-medium text-dark-muted mt-1 italic opacity-30 uppercase tracking-widest">Baabdath, Mont-Liban</span>
+                </div>
+            );
+        }
+
+        function LogoDisplay({ customLogo, heightClass, defaultColor }) {
+            if (customLogo) return <img src={customLogo} alt="Logo" className={`${heightClass} w-auto object-contain`} />;
+            return <div className={`${heightClass} w-auto ${defaultColor}`}><Icons.CFLLogo /></div>;
+        }
+
+        function TreeNode({ node, level, onSelect, selectedNodePath }) {
+            if (!node) return null;
+
+            const [isExp, setIsExp] = useState(level < 1);
+            const hasC = node.children && node.children.length > 0;
+            const isS = selectedNodePath === node.path;
+            const toggle = (e) => { e.stopPropagation(); if (hasC) setIsExp(!isExp); onSelect(node); };
+            
+            if (level === -1) return <>{node.children.map((c, i) => <TreeNode key={i} node={c} level={0} onSelect={onSelect} selectedNodePath={selectedNodePath} />)}</>;
+            
+            return (
+                <div className="select-none">
+                    <div onClick={toggle} className={`flex items-center py-1.5 px-2 cursor-pointer rounded text-sm transition-all ${isS ? 'bg-cfl-900/40 border border-cfl-800/50 font-semibold text-cfl-400' : 'text-gray-300 hover:bg-dark-border/50'}`} style={{ paddingLeft: `${level * 16 + 8}px`, marginBottom: '2px' }}>
+                        <span className="w-5 flex justify-center mr-1">{hasC ? (isExp ? <Icons.ChevronDown /> : <Icons.ChevronRight />) : <span className="w-4"></span>}</span>
+                        <span className="mr-2">{isExp && hasC ? <div className="w-5 h-5 text-cfl-500"><Icons.FolderOpen /></div> : <div className="w-5 h-5"><Icons.Folder /></div>}</span>
+                        <span className="truncate">{node.name}</span>
+                    </div>
+                    {isExp && hasC && <div className="flex flex-col border-l border-dark-border ml-4 pl-1 mt-1">{node.children.map((c, i) => <TreeNode key={i} node={c} level={level + 1} onSelect={onSelect} selectedNodePath={selectedNodePath} />)}</div>}
+                </div>
+            );
+        }
+
+        function CoverPage({ stats, metadata, customImage, onImageUpload, isStandalone }) {
+            return (
+                <div className="flex-1 overflow-y-auto p-8 z-10 custom-scrollbar bg-dark-bg/20">
+                    <div className="max-w-5xl mx-auto pb-10">
+                        
+                        <div className={`project-image-container mb-12 shadow-2xl relative group ${!isStandalone ? 'cursor-pointer hover:ring-2 ring-cfl-500 transition-all' : ''}`}>
+                            {!isStandalone && (
+                                <input 
+                                    type="file" 
+                                    accept="image/*" 
+                                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" 
+                                    onChange={onImageUpload} 
+                                    title="Cliquez pour changer la photo du projet"
+                                />
+                            )}
+                            <ProjectImageDisplay customImage={customImage} isStandalone={isStandalone} />
+                            {!isStandalone && customImage && (
+                                <div className="absolute inset-0 bg-dark-bg/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center pointer-events-none">
+                                    <span className="text-white font-black tracking-widest uppercase text-xs bg-cfl-600 px-6 py-3 rounded-xl shadow-2xl">Changer la photo</span>
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="mb-10">
+                            <h2 className="text-4xl font-bold text-cfl-500 mb-3 tracking-tight">{metadata.projectName}</h2>
+                            <h3 className="text-xl font-medium text-gray-400 border-b border-dark-border pb-5 uppercase tracking-widest text-sm">Audit des Autorisations Documentaires</h3>
+                        </div>
+                        <div className="bg-dark-panel border-l-4 border-l-cfl-600 border-t border-r border-b border-dark-border rounded-r-2xl p-8 mb-12 shadow-2xl flex flex-col md:flex-row justify-between gap-8">
+                            <div className="flex-1">
+                                <p className="text-[10px] text-dark-muted mb-2 uppercase font-black tracking-widest opacity-60">Généré par</p>
+                                <p className="text-3xl font-black text-white">{metadata.createdBy}</p>
+                                <div className="mt-8">
+                                    <p className="text-[10px] text-dark-muted mb-2 uppercase font-black tracking-widest opacity-60 flex items-center"><div className="w-4 h-4 mr-2"><Icons.FolderTree /></div> Périmètre</p>
+                                    <p className="text-sm font-medium text-gray-300 bg-dark-bg/60 p-4 rounded-xl border border-dark-border leading-relaxed">{metadata.includedFolders}</p>
+                                </div>
+                            </div>
+                            <div className="md:text-right bg-dark-bg/40 px-8 py-6 rounded-2xl border border-dark-border flex flex-col justify-center h-fit min-w-[280px]">
+                                <p className="text-[10px] text-dark-muted mb-2 uppercase font-black tracking-widest opacity-60">Date de l'export</p>
+                                <p className="text-xl font-black text-white">{metadata.reportDate}</p>
+                            </div>
+                        </div>
+                        
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-8 mb-16 text-center text-white">
+                            {[
+                                { label: 'Dossiers', val: stats.folders, icon: <Icons.FolderOpen /> },
+                                { label: 'Rôles', val: stats.roles, icon: <Icons.Users /> },
+                                { label: 'Utilisateurs', val: stats.users, icon: <Icons.User /> }
+                            ].map((s, i) => (
+                                <div key={i} className="bg-dark-panel border border-dark-border rounded-2xl p-8 shadow-xl flex flex-col items-center justify-center hover:bg-dark-border/40 hover:scale-105 transition-all group">
+                                    <div className="p-4 bg-dark-bg/80 text-white rounded-full mb-4 shadow-inner group-hover:bg-cfl-600 transition-colors">{s.icon}</div>
+                                    <p className="text-5xl font-black">{s.val}</p>
+                                    <p className="text-[10px] text-dark-muted uppercase font-black mt-2 tracking-widest opacity-50">{s.label}</p>
+                                </div>
+                            ))}
+                        </div>
+                        
+                        <div className="flex items-center mb-8 border-b border-dark-border pb-4">
+                            <div className="w-6 h-6 text-cfl-500 mr-4"><Icons.LogoBuilding /></div>
+                            <h3 className="text-xl font-black text-white uppercase tracking-widest">Légende des Niveaux d'Accès</h3>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-white">
+                            {Object.entries(ACCESS_LEVELS).map(([k, v]) => (
+                                <div key={k} className={`p-6 rounded-2xl border ${v.color} bg-opacity-20 shadow-xl flex flex-col justify-center hover:bg-opacity-30 transition-all border-l-[6px]`}>
+                                    <div className="flex items-center mb-3">
+                                        <div className="text-3xl font-black mr-4 opacity-100">{k}</div>
+                                        <div className="h-4 w-px bg-current opacity-30 mr-4"></div>
+                                        <div className="text-sm font-black uppercase tracking-wider">{v.label}</div>
+                                    </div>
+                                    <div className="text-xs font-medium leading-relaxed opacity-70 italic">{v.desc}</div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // --- 4. COMPOSANT PRINCIPAL APP ---
+        function App() {
+            // Initialisation synchrone totale pour éviter le flash d'interface
+            const embeddedData = useMemo(() => {
+                const s = document.getElementById('embedded-csv');
+                const m = document.getElementById('embedded-metadata');
+                const l = document.getElementById('embedded-logo');
+                const img = document.getElementById('embedded-image');
+                
+                let isStd = false;
+                let initialTree = null;
+                let initialStats = { folders: 0, users: 0, roles: 0 };
+                let initialUsers = [];
+                let initialRoles = [];
+                let initialCsv = null;
+                let initialMetadata = {
+                    projectName: 'Autodesk Construction Cloud',
+                    reportDate: new Date().toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' }),
+                    createdBy: 'Benoit TAHCHI (Audit)',
+                    includedFolders: 'Arborescence complète'
+                };
+                let initialLogo = null;
+                let initialImg = null;
+
+                if (s && s.textContent && s.textContent.trim().length > 0) {
+                    isStd = true;
+                    initialCsv = decodeURIComponent(s.textContent);
+                    const res = parseCSV(initialCsv);
+                    if(res){ 
+                        initialTree = res.tree; 
+                        initialStats = res.stats; 
+                        initialUsers = res.usersList; 
+                        initialRoles = res.rolesList; 
+                    }
+                }
+                
+                if (l && l.textContent && l.textContent.trim().length > 0) initialLogo = decodeURIComponent(l.textContent);
+                if (img && img.textContent && img.textContent.trim().length > 0) initialImg = decodeURIComponent(img.textContent);
+                if (m && m.textContent && m.textContent.trim().length > 0) try { initialMetadata = JSON.parse(decodeURIComponent(m.textContent)); } catch(e){}
+
+                return { isStd, initialTree, initialStats, initialUsers, initialRoles, initialCsv, initialMetadata, initialLogo, initialImg };
+            }, []);
+
+            const [csvData, setCsvData] = useState(embeddedData.initialCsv);
+            const [tree, setTree] = useState(embeddedData.initialTree);
+            const [stats, setStats] = useState(embeddedData.initialStats);
+            const [usersList, setUsersList] = useState(embeddedData.initialUsers);
+            const [rolesList, setRolesList] = useState(embeddedData.initialRoles);
+            const [metadata, setMetadata] = useState(embeddedData.initialMetadata);
+            const [customLogo, setCustomLogo] = useState(embeddedData.initialLogo);
+            const [customImage, setCustomImage] = useState(embeddedData.initialImg);
+            const [isStandalone] = useState(embeddedData.isStd); // Figé à l'initialisation
+
+            const [selectedNode, setSelectedNode] = useState(null);
+            const [searchQuery, setSearchQuery] = useState('');
+            const [globalEntityFilter, setGlobalEntityFilter] = useState('');
+            const [globalGroupFilter, setGlobalGroupFilter] = useState('');
+            const [filter, setFilter] = useState('all');
+            const [tableSearch, setTableSearch] = useState('');
+            const [hideNA, setHideNA] = useState(true);
+            const [loading, setLoading] = useState(false);
+
+            const handleFileUpload = (e) => {
+                const file = e.target.files[0]; if (!file) return;
+                setLoading(true); const reader = new FileReader();
+                reader.onload = (evt) => {
+                    let csv = "";
+                    if (file.name.endsWith('.xlsx') || file.name.endsWith('.xls')) {
+                        const data = new Uint8Array(evt.target.result); const wb = XLSX.read(data, {type: 'array'});
+                        let tSheet = wb.SheetNames[0]; let pSheet = null;
+                        wb.SheetNames.forEach(n => { if(n.toLowerCase().includes('autorisation')) tSheet = n; if(n.toLowerCase().includes('présentation')) pSheet = n; });
+                        const newM = { ...metadata };
+                        if (pSheet) {
+                            const pData = XLSX.utils.sheet_to_json(wb.Sheets[pSheet], {header: 1});
+                            pData.forEach((row, i) => {
+                                if (i === 1 && row[1]) newM.projectName = row[1];
+                                row.forEach((val, j) => {
+                                    if (typeof val === 'string') {
+                                        if (val.trim() === 'Date de création') newM.reportDate = row[j+1] || newM.reportDate;
+                                        if (val.trim() === 'Créé par') newM.createdBy = row[j+1] || newM.createdBy;
+                                        if (val.trim() === 'Dossiers inclus') newM.includedFolders = row[j+1] || newM.includedFolders;
+                                    }
+                                });
+                            });
+                        }
+                        setMetadata(newM); csv = XLSX.utils.sheet_to_csv(wb.Sheets[tSheet]);
+                    } else {
+                        csv = evt.target.result;
+                    }
+                    setCsvData(csv); const res = parseCSV(csv);
+                    if(res){ setTree(res.tree); setStats(res.stats); setUsersList(res.usersList); setRolesList(res.rolesList); }
+                    setLoading(false);
+                };
+                if (file.name.endsWith('.xlsx')) reader.readAsArrayBuffer(file); else reader.readAsText(file);
+            };
+
+            const handleLogoUpload = (e) => {
+                const file = e.target.files[0]; if(!file) return;
+                const r = new FileReader(); r.onload = (evt) => setCustomLogo(evt.target.result); r.readAsDataURL(file);
+            };
+
+            const handleProjectImageUpload = (e) => {
+                const file = e.target.files[0]; if(!file) return;
+                const r = new FileReader(); r.onload = (evt) => setCustomImage(evt.target.result); r.readAsDataURL(file);
+            };
+
+            const exportStandaloneHTML = () => {
+                if (!csvData) { alert("Veuillez charger un fichier."); return; }
+                const csvValue = encodeURIComponent(csvData);
+                const metaValue = encodeURIComponent(JSON.stringify(metadata));
+                const logoValue = customLogo ? encodeURIComponent(customLogo) : "";
+                const imageValue = customImage ? encodeURIComponent(customImage) : "";
+                const scriptContent = document.getElementById('main-script').innerHTML;
+
+                const headHtml = '<!DOCTYPE html>\n<html lang="fr" class="dark">\n<head>\n<meta charset="UTF-8">\n<meta name="viewport" content="width=device-width, initial-scale=1.0">\n<title>Audit Accès CFLimmo</title>\n' +
+                                 '<script src="https://unpkg.com/react@18/umd/react.production.min.js"><\/script>\n' +
+                                 '<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"><\/script>\n' +
+                                 '<script src="https://unpkg.com/@babel/standalone/babel.min.js"><\/script>\n' +
+                                 '<script src="https://unpkg.com/xlsx/dist/xlsx.full.min.js"><\/script>\n' +
+                                 '<script src="https://cdn.tailwindcss.com"><\/script>\n' +
+                                 '<script>window.tailwind.config={darkMode:"class",theme:{extend:{colors:{cfl:{50:"#fef2f2",100:"#fee2e2",500:"#ef4444",600:"#dc2626",700:"#b91c1c",800:"#991b1b",900:"#7f1d1d"},dark:{bg:"#0f172a",panel:"#1e293b",border:"#334155",text:"#f8fafc",muted:"#94a3b8"}}}}};<\/script>\n' +
+                                 '<style>::-webkit-scrollbar{width:8px;height:8px}::-webkit-scrollbar-track{background:#0f172a}::-webkit-scrollbar-thumb{background:#334155;border-radius:4px}::-webkit-scrollbar-thumb:hover{background:#475569}.custom-scrollbar{scrollbar-width:thin;scrollbar-color:#334155 #0f172a}.pine-gradient{background:radial-gradient(circle at top right,rgba(21,128,61,0.08),transparent)}.project-image-container{position:relative;width:100%;height:240px;border-radius:1.5rem;overflow:hidden;background:#1e293b;border:1px solid #334155;box-shadow:inset 0 2px 4px 0 rgba(0,0,0,0.06);}<\/style>\n' +
+                                 '</head>\n<body class="bg-dark-bg text-dark-text font-sans h-screen overflow-hidden flex flex-col selection:bg-cfl-600 selection:text-white pine-gradient">\n';
+
+                const bodyHtml = '<script id="embedded-csv" type="text/plain">' + csvValue + '<\/script>\n' +
+                                 '<script id="embedded-metadata" type="application/json">' + metaValue + '<\/script>\n' +
+                                 '<script id="embedded-logo" type="text/plain">' + logoValue + '<\/script>\n' +
+                                 '<script id="embedded-image" type="text/plain">' + imageValue + '<\/script>\n' +
+                                 '<div id="root" class="h-full"></div>\n' +
+                                 '<script id="main-script" type="text/babel">\n' + scriptContent.replace(/<\/script>/g, '<\\/script>') + '\n<\/script>\n' +
+                                 '</body>\n</html>';
+
+                try {
+                    const blob = new Blob([headHtml + bodyHtml], { type: 'text/html' });
+                    const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.style.display = 'none'; a.href = url; a.download = 'Audit_CFLimmo_Baabdath.html';
+                    document.body.appendChild(a); a.click();
+                    setTimeout(() => { document.body.removeChild(a); window.URL.revokeObjectURL(url); }, 200);
+                } catch (err) { alert("L'exportation a échoué."); }
+            };
+
+            const allFolders = useMemo(() => { if (!tree) return []; const res = []; const trav = (n) => { if (n.path) res.push(n); if (n.children) n.children.forEach(trav); }; trav(tree); return res; }, [tree]);
+            const activeList = useMemo(() => {
+                if (!searchQuery.trim() && !globalEntityFilter && !globalGroupFilter) return null;
+                let list = allFolders;
+                if (globalEntityFilter) list = list.filter(f => [...f.permissions.users, ...f.permissions.roles].some(p => p.name === globalEntityFilter && p.level !== 'NA'));
+                else if (globalGroupFilter) list = list.filter(f => [...f.permissions.users, ...f.permissions.roles].some(p => p.level !== 'NA' && isRoleInGroup(p.name, globalGroupFilter)));
+                if (searchQuery.trim()) { const q = searchQuery.toLowerCase(); list = list.filter(f => f.name.toLowerCase().includes(q) || f.path.toLowerCase().includes(q)); }
+                return list;
+            }, [searchQuery, globalEntityFilter, globalGroupFilter, allFolders]);
+
+            if (!tree) {
+                if (isStandalone) {
+                    return (
+                        <div className="flex items-center justify-center h-screen bg-dark-bg">
+                            <div className="text-white font-black uppercase tracking-widest animate-pulse opacity-50 flex items-center">
+                                <div className="w-6 h-6 mr-3"><Icons.Pine /></div> Chargement de l'audit...
+                            </div>
+                        </div>
+                    );
+                }
+                return (
+                    <div className="flex items-center justify-center h-screen bg-dark-bg">
+                        <div className="bg-dark-panel p-12 rounded-3xl shadow-2xl border border-dark-border text-center max-w-lg w-full relative z-10">
+                            <div className="flex justify-center items-center mb-10 text-green-600/30"><Icons.Pine /></div>
+                            <h2 className="text-2xl font-black text-white mb-4 uppercase tracking-widest">Audit des Accès</h2>
+                            <p className="text-dark-muted mb-10 text-sm leading-relaxed opacity-60">Chargez le rapport d'exportation complet d'Autodesk Construction Cloud (Excel).</p>
+                            <label className={`cursor-pointer ${loading ? 'bg-dark-border' : 'bg-cfl-600 hover:bg-cfl-700'} text-white font-black py-4 px-12 rounded-2xl transition-all shadow-2xl inline-block uppercase text-xs tracking-widest ring-offset-4 ring-offset-dark-bg focus:ring-2 ring-cfl-500`}>
+                                {loading ? 'Analyse...' : 'Ouvrir Rapport (Excel / CSV)'}
+                                <input type="file" accept=".csv, .xlsx, .xls" className="hidden" onChange={handleFileUpload} disabled={loading} />
+                            </label>
+                        </div>
+                    </div>
+                );
+            }
+
+            let tableList = [];
+            if (selectedNode) {
+                const u = selectedNode.permissions.users || []; const r = selectedNode.permissions.roles || [];
+                if (filter === 'all') tableList = [...u, ...r];
+                else if (filter === 'users') tableList = [...u];
+                else if (filter === 'roles') tableList = [...r];
+                else if (filter.startsWith('g_')) tableList = [...u, ...r].filter(item => isRoleInGroup(item.name, filter));
+                if (tableSearch.trim()) { const q = tableSearch.toLowerCase(); tableList = tableList.filter(x => x.name.toLowerCase().includes(q) || x.level.toLowerCase().includes(q)); }
+                if (hideNA) tableList = tableList.filter(x => x.level !== 'NA');
+                tableList.sort((a,b) => a.level === 'NA' ? 1 : b.level === 'NA' ? -1 : a.name.localeCompare(b.name));
+            }
+
+            const rolesRes = {}; if(selectedNode) selectedNode.permissions.roles.forEach(ro => { if(ro.level !== 'NA') rolesRes[ro.level] = (rolesRes[ro.level] || 0) + 1; });
+
+            return (
+                <div className="flex h-screen bg-dark-bg">
+                    {/* Sidebar */}
+                    <div className="w-1/3 min-w-[340px] max-w-md border-r border-dark-border flex flex-col bg-dark-panel z-20 shadow-2xl">
+                        <div className={`p-8 border-b border-dark-border bg-dark-bg flex items-center justify-center shadow-lg relative ${!isStandalone ? 'group cursor-pointer hover:bg-dark-bg/80 transition-colors' : ''}`}>
+                            {!isStandalone && (
+                                <input type="file" accept="image/*" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" onChange={handleLogoUpload} title="Changer le logo principal" />
+                            )}
+                            <LogoDisplay customLogo={customLogo} heightClass="h-10" defaultColor="text-cfl-600 relative z-0" />
+                            {!isStandalone && (
+                                <div className="absolute inset-0 bg-dark-bg/90 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center z-0 pointer-events-none">
+                                    <span className="text-[10px] font-black uppercase tracking-[0.2em] text-white flex items-center">
+                                        <div className="w-4 h-4 mr-2"><Icons.Image /></div> Changer le Logo
+                                    </span>
+                                </div>
+                            )}
+                        </div>
+                        <div onClick={() => setSelectedNode(null)} className={`px-6 py-4 border-b border-dark-border cursor-pointer flex items-center transition-all ${!selectedNode ? 'bg-cfl-900/30 border-l-[6px] border-l-cfl-500 shadow-inner' : 'hover:bg-dark-border/50 border-l-[6px] border-l-transparent'}`}>
+                            <div className={`mr-4 ${!selectedNode ? 'text-cfl-500' : 'text-gray-400'}`}><Icons.Home /></div>
+                            <span className={`font-black uppercase text-[11px] tracking-widest ${!selectedNode ? 'text-white' : 'text-gray-400'}`}>Accueil & Dashboard</span>
+                        </div>
+                        
+                        {!isStandalone && (
+                            <div className="flex border-b border-dark-border bg-dark-bg/50 text-[9px]">
+                                <label className="flex-1 py-3 cursor-pointer flex justify-center items-center hover:bg-dark-border/50 transition-all font-black uppercase tracking-widest"><Icons.Upload /> <span className="ml-2 opacity-80">Remplacer Rapport</span><input type="file" accept=".csv, .xlsx, .xls" className="hidden" onChange={handleFileUpload} /></label>
+                            </div>
+                        )}
+
+                        <div className="p-5 border-b border-dark-border bg-dark-panel sticky top-0 flex flex-col space-y-4 z-10 shadow-xl">
+                            <div className="relative">
+                                <span className="absolute inset-y-0 left-0 flex items-center pl-4 opacity-50"><Icons.Filter /></span>
+                                <select className="w-full pl-10 pr-8 py-2.5 bg-dark-bg border border-dark-border rounded-xl text-xs font-black uppercase tracking-tighter text-gray-200 focus:outline-none appearance-none cursor-pointer" value={globalEntityFilter} onChange={(e) => { setGlobalEntityFilter(e.target.value); setGlobalGroupFilter(''); }}>
+                                    <option value="">👤 Filtrer par Personne/Rôle</option>
+                                    <optgroup label="--- UTILISATEURS ---">{usersList.map(u => <option key={u} value={u}>{u}</option>)}</optgroup>
+                                    <optgroup label="--- RÔLES ---">{rolesList.map(r => <option key={r} value={r}>{r}</option>)}</optgroup>
+                                </select>
+                            </div>
+                            <div className="flex flex-wrap gap-1.5">
+                                {['g_cflimmo', 'g_cflimmo_cdp', 'g_cflimmo_bim', 'g_entreprises', 'g_controle', 'g_mog', 'g_mog_bim'].map(g => (
+                                    <button key={g} onClick={() => { setGlobalGroupFilter(globalGroupFilter === g ? '' : g); setGlobalEntityFilter(''); }} className={`px-2.5 py-1.5 rounded-lg text-[8px] font-black uppercase tracking-widest transition-all ${globalGroupFilter === g ? 'bg-cfl-600 text-white shadow-lg scale-105' : 'bg-dark-bg border border-dark-border text-gray-400 hover:text-white'}`}>
+                                        {g.replace('g_', '').replace('_', ' ').replace('cdp', 'CDP')}
+                                    </button>
+                                ))}
+                            </div>
+                            <div className="relative">
+                                <span className="absolute inset-y-0 left-0 flex items-center pl-4 opacity-50"><Icons.Search /></span>
+                                <input type="text" placeholder="RECHERCHER UN DOSSIER..." className="w-full pl-10 pr-10 py-2.5 bg-dark-bg border border-dark-border rounded-xl text-xs text-white focus:ring-1 focus:ring-cfl-500 font-black tracking-tight" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
+                            </div>
+                        </div>
+                        <div className="flex-1 overflow-y-auto p-4 custom-scrollbar bg-dark-bg/20">
+                            {activeList ? (
+                                <div className="flex flex-col space-y-2 pb-6">
+                                    <div className="text-[10px] font-black text-cfl-500 mb-3 px-2 uppercase tracking-widest flex justify-between items-center opacity-70"><span>Dossiers trouvés ({activeList.length})</span></div>
+                                    {activeList.slice(0, 100).map((n, i) => {
+                                        let match = 0; if (globalGroupFilter) match = [...n.permissions.users, ...n.permissions.roles].filter(x => x.level !== 'NA' && isRoleInGroup(x.name, globalGroupFilter)).length;
+                                        return (
+                                            <div key={i} onClick={() => setSelectedNode(n)} className={`p-3.5 rounded-2xl cursor-pointer transition-all flex flex-col ${selectedNode?.path === n.path ? 'bg-cfl-900/40 border border-cfl-800/50 text-cfl-400 shadow-2xl scale-[1.02]' : 'hover:bg-dark-border/40 text-gray-300'}`}>
+                                                <div className="flex items-center justify-between">
+                                                    <div className="flex items-center overflow-hidden pr-2"><div className={`w-4 h-4 mr-3 flex-shrink-0 ${selectedNode?.path === n.path ? 'text-cfl-500' : 'text-gray-500'}`}><Icons.Folder /></div><span className="truncate text-sm font-bold tracking-tight">{n.name}</span></div>
+                                                    {match > 0 && <span className="text-[9px] px-2 py-0.5 rounded-full bg-purple-900/60 border border-purple-700 text-purple-200 font-black">{match}</span>}
+                                                </div>
+                                                <div className="text-[9px] text-dark-muted truncate mt-2 ml-7 opacity-50 font-mono uppercase tracking-tighter">{n.path}</div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            ) : <TreeNode node={tree} level={-1} onSelect={setSelectedNode} selectedNodePath={selectedNode?.path} />}
+                        </div>
+                        
+                        {!isStandalone && (
+                            <div className="p-6 border-t border-dark-border bg-dark-panel">
+                                <button onClick={exportStandaloneHTML} className="w-full flex items-center justify-center py-4 bg-dark-bg border border-cfl-700 text-cfl-400 rounded-2xl hover:text-white hover:bg-cfl-900/40 transition-all font-black text-[11px] uppercase tracking-[0.2em] shadow-xl"><Icons.Share /> Partager l'audit final</button>
+                            </div>
+                        )}
+                    </div>
+
+                    <div className="flex-1 flex flex-col bg-dark-bg overflow-hidden relative shadow-inner">
+                        {!selectedNode ? <CoverPage stats={stats} metadata={metadata} customImage={customImage} onImageUpload={handleProjectImageUpload} isStandalone={isStandalone} /> : (
+                            <div className="flex-1 flex flex-col overflow-hidden z-10">
+                                <div className="p-10 border-b border-dark-border bg-dark-panel shadow-lg flex-shrink-0 flex justify-between items-start">
+                                    <div className="flex-1 overflow-hidden pr-6">
+                                        <div className="text-[10px] font-black text-cfl-500 uppercase mb-4 tracking-[0.3em] flex items-center opacity-60"><div className="w-4 h-4 mr-3"><Icons.Folder /></div> Dossier Actif</div>
+                                        <h2 className="text-4xl font-black text-white break-all leading-[1.1] tracking-tight">{selectedNode.name}</h2>
+                                        <p className="text-[10px] text-dark-muted mt-5 font-mono bg-dark-bg/60 px-4 py-2.5 rounded-xl border border-dark-border inline-block max-w-full truncate opacity-80 tracking-widest uppercase">{selectedNode.path || '/'}</p>
+                                    </div>
+                                    <button onClick={() => setSelectedNode(null)} className="flex items-center space-x-3 px-6 py-3 bg-dark-bg border border-dark-border rounded-2xl text-dark-muted hover:text-white hover:border-cfl-500 transition-all group shrink-0 shadow-2xl">
+                                        <Icons.Home /><span className="text-[11px] font-black uppercase tracking-widest">Dashboard</span>
+                                    </button>
+                                </div>
+                                {Object.keys(rolesRes).length > 0 && (
+                                    <div className="mx-10 mt-8 p-6 bg-dark-panel border border-dark-border rounded-3xl relative overflow-hidden flex-shrink-0 shadow-2xl">
+                                        <div className="absolute left-0 top-0 bottom-0 w-2 bg-cfl-600 shadow-[0_0_15px_rgba(220,38,38,0.5)]"></div>
+                                        <div className="flex flex-wrap gap-3">{Object.entries(rolesRes).map(([k,v]) => <div key={k} className={`px-4 py-1.5 rounded-xl text-[11px] font-black border uppercase tracking-wider ${ACCESS_LEVELS[k].color} shadow-lg`}><span className="mr-3 opacity-60">{v}</span>{k}</div>)}</div>
+                                    </div>
+                                )}
+                                <div className="px-10 py-6 mt-6 flex flex-col xl:flex-row xl:items-center justify-between border-y border-dark-border bg-dark-bg/80 flex-shrink-0 gap-6 backdrop-blur-xl">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        {['all', 'users', 'roles', 'g_cflimmo', 'g_cflimmo_cdp', 'g_cflimmo_bim', 'g_entreprises', 'g_controle', 'g_mog', 'g_mog_bim'].map(f => (
+                                            <button key={f} onClick={() => setFilter(filter === f ? 'all' : f)} className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${filter === f ? 'bg-cfl-600 text-white shadow-2xl scale-105' : 'bg-dark-panel border border-dark-border text-dark-muted hover:text-white'}`}>
+                                                {f === 'all' ? 'Tout' : f.replace('g_', '').replace('_', ' ').replace('cdp', 'CDP')}
+                                            </button>
+                                        ))}
+                                        <label className="flex items-center space-x-3 text-[10px] text-dark-muted cursor-pointer hover:text-white ml-4 font-black bg-dark-panel border border-dark-border px-4 py-2 rounded-xl transition-all uppercase tracking-widest">
+                                            <input type="checkbox" checked={hideNA} onChange={(e) => setHideNA(e.target.checked)} className="rounded-lg border-dark-border text-cfl-600 bg-dark-bg cursor-pointer w-4 h-4" />
+                                            <span>Masquer NA</span>
+                                        </label>
+                                    </div>
+                                    <div className="relative w-full xl:w-80">
+                                        <span className="absolute inset-y-0 left-0 flex items-center pl-4 opacity-40"><Icons.Search /></span>
+                                        <input type="text" placeholder="FILTRER LE TABLEAU..." className="w-full pl-11 pr-8 py-3 bg-dark-panel border border-dark-border rounded-2xl text-[11px] text-white placeholder-gray-500 focus:ring-1 focus:ring-cfl-500 transition-all font-black uppercase tracking-[0.1em]" value={tableSearch} onChange={(e) => setTableSearch(e.target.value)} />
+                                    </div>
+                                </div>
+                                <div className="flex-1 overflow-y-auto px-10 pb-10 pt-6 custom-scrollbar">
+                                    <div className="border border-dark-border rounded-[2.5rem] overflow-hidden shadow-[0_35px_60px_-15px_rgba(0,0,0,0.8)] bg-dark-panel">
+                                        <table className="w-full text-left border-collapse text-sm">
+                                            <thead>
+                                                <tr className="bg-dark-bg/70 border-b border-dark-border text-dark-muted font-black uppercase tracking-[0.2em] text-[10px]">
+                                                    <th className="p-6 w-16 text-center">Type</th>
+                                                    <th className="p-6">Identifiant</th>
+                                                    <th className="p-6">Groupe Global</th>
+                                                    <th className="p-6 w-1/4">Accès BIM 360 / ACC</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-dark-border text-white">
+                                                {tableList.map((item, idx) => {
+                                                    const lvl = ACCESS_LEVELS[item.level] || ACCESS_LEVELS['NA'];
+                                                    const group = getGlobalGroupName(item.name);
+                                                    return (
+                                                        <tr key={idx} className={`hover:bg-dark-bg/40 transition-colors ${item.level === 'NA' ? 'opacity-20' : ''}`}>
+                                                            <td className="p-6 flex justify-center opacity-50">{item.type === 'user' ? <Icons.User /> : <Icons.Users />}</td>
+                                                            <td className="p-6 font-black tracking-tight text-base">{item.name}</td>
+                                                            <td className="p-6 text-[10px] text-dark-muted font-black tracking-widest">{group !== '-' ? <span className="bg-dark-bg/60 border border-dark-border px-3 py-1.5 rounded-lg shadow-sm uppercase opacity-90">{group}</span> : <span className="opacity-20">-</span>}</td>
+                                                            <td className="p-6"><span className={`inline-flex items-center px-4 py-2 rounded-2xl border ${lvl.color} font-black text-[10px] uppercase tracking-widest shadow-lg`}>{item.level !== 'NA' && <span className="mr-3 w-2 h-2 rounded-full bg-current shadow-[0_0_10px_currentColor]"></span>}{lvl.label}</span></td>
+                                                        </tr>
+                                                    );
+                                                })}
+                                                {tableList.length === 0 && <tr><td colSpan="4" className="p-20 text-center text-dark-muted font-black uppercase tracking-[0.3em] opacity-30">Aucun résultat</td></tr>}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
